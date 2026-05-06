@@ -43,7 +43,7 @@ jobs:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
       DOCKER_IMAGE: hb-app
-      DOCKER_TAG: ${{{ github.sha }}}
+      DOCKER_TAG: ${{ github.sha }}}
       DOCKER_REGISTRY: ${{ vars.DOCKER_REGISTRY }}
 
     steps:
