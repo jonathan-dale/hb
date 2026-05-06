@@ -1,0 +1,106 @@
+name: CI/CD Pipeline for the HB App
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    branches:
+      - 'main'
+  workflow_dispatch:
+    inputs:
+      FORCE_DEPLOY:
+        description: "Force deploy the app to the dev environment"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    if: false == true # TODO: Uncomment this when tests are ready
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: pytest
+        
+  build:
+    if: github.ref == 'refs/heads/main' || inputs.FORCE_DEPLOY == true
+    name: Build and push the Docker image
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      DOCKER_IMAGE: hb-app
+      DOCKER_TAG: ${{{ github.sha }}}
+      DOCKER_REGISTRY: ${{ vars.DOCKER_REGISTRY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: configure credentials for docker hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push the Docker image
+        uses: docker/build-push-action@v2 # TODO: this should be pinned to a specific sha...
+        with:
+          context: .
+          file: Dockerfile
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+      
+  deploy:
+    if: github.ref == 'refs/heads/main' || inputs.FORCE_DEPLOY == true
+    name: Deploy the Docker image to the dev environment
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Deploy
+        uses: .github/actions/update-image-tag
+        with:
+          REPOSITORY: ${{ vars.HELM-CHART-REPO }}
+          REF: main
+          IMAGE_TAG: ${{ github.sha }}
+          
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v2
+      
+      - name: promote to staging
+        uses: .github/actions/update-image-tag
+        with:
+          REPOSITORY: ${{ vars.HELM-CHART-REPO }}
+          REF: main
+          PROMOTE: true
+          SOURCE_ENV: 'dev'
+          TARGET_ENV: 'staging'
+          IMAGE_TAG_KEY: ${{ vars.IMAGE_TAG_KEY }}
+
+        

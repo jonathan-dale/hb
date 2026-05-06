@@ -1,0 +1,93 @@
+name: "Update Image Tag"
+description: "Update the image tag in the Helm Chart"
+
+inputs:
+  REPOSITORY:
+    description: "Helm chart repo"
+    required: true
+  REF:
+    description: "Helm chart repo ref (the branch name, usually main)"
+    required: false
+    default: main
+  PROMOTE:
+    description: "Are we promoting?"
+    required: false
+    defailt: "fasle"
+  SOURCE_ENV:
+    description: "The source we promote from"
+    required: fasle
+    default: dev
+  TARGET_ENV:
+    description: "The target we promote to"
+    required: fasle
+  IMAGE_TAG_KEY:
+    description: "The helm parameter name for the image tag, (e.g hb-app.image.tag)"
+    required: true
+
+  runs:
+    using: "composite"
+    steps:
+
+    - name: clone the helm chart repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.REPOSITORY }}
+        ref: ${{ inputs.REF }}
+        fetch-depth: 0
+        path: "helm-chart-repo"
+
+    - name: Promote
+      id: promote
+      env:
+        PROMOTE:  ${{ inputs.PROMOTE }}
+        SOURCE: ${{ inputs.SOURCE_ENV }}
+        TARGET: ${{ inputs.TARGET }}
+        IMAGE_TAG: ${{ inputs.IMAGE_TAG }}
+        IMAGE_TAG_KEY: ${{ inputs.IMAGE_TAG_KEY }}
+
+      shell: bash
+      run: |
+        cd helm-chart-repo
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+
+        if [[ PROMOTE == 'true' ]]; then
+          echo "promoting from $SOURCE to --> $TARGET"
+          IMAGE_TAG=$(yq -r '(.helm.parameters[] | select(.name == "'"$IMAGE_TAG_KEY"'")).value' $SOURCE/.argocd-source.yaml)
+          TARGET_IMAGE_TAG=$(yq -r '(.helm.parameters[] | select(.name == "'"$IMAGE_TAG_KEY"'")).value' $TARGET_ENV/.argocd-source.yaml)
+          
+          # check if tag is the same
+          if [[ $IMAGE_TAG == $TARGET_IMAGE_TAG ]]; then
+            echo "Source and target image tags are the same. Exiting....."
+            exit 0
+          fi
+
+          # Echo the current image tags for logging/debugging
+          echo "---- Source image tag: ----- ${IMAGE_TAG}"
+          echo "---- Target image tag: ----- ${TARGET_IMAGE_TAG}"
+
+          yq -i '(.helm.parameters[] | select(.name == "'"IMAGE_TAG_KEY"'")).value = "'"${IMAGE_TAG}"'"' $TARGET_ENV/.argocd-source.yaml
+          git add $TARGET_ENV/.argocd-source.yaml
+          ENVIRONMENT=$(echo TARGET_ENV | yq upcase -)
+          git commit -m '$ENVIRONMENT: ${IMAGE_TAG}' # This appears on the git repository as a clean message of last commit
+          git fetch
+          git push 
+
+        else:
+          echo "not promoting, only updating the dev environment"
+          CURRENT_IMAGE_TAG=$(yq -r '(.helm.parameters[] | select(.name == "'"$IMAGE_TAG_KEY"'")).value' dev/.argocd-source.yaml)
+
+          echo "---- Current image tag: ----- ${CURRENT_IMAGE_TAG}"
+          echo "---- Desired image tag: ----- $IMAGE_TAG"
+
+          if [[ $CURRENT_IMAGE_TAG == $IMAGE_TAG ]]; then
+            echo "Image tag for the dev environment is up to date, exiting....."
+            exit 0
+          fi
+
+          yq -i '(.helm.parameters[] | select(.name == "'"$IMAGE_TAG_KEY"'")).value = "'"$IMAGE_TAG"'"' dev/.argocd-source.yaml
+          git add dev/.argocd-source.yaml
+          git commit -m "DEV: $IMAGE_TAG"
+          git fetch
+          git push
+
